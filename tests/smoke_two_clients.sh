@@ -39,7 +39,7 @@ fi
 
 {
     sleep 12
-    printf 'call\nquit\n'
+    printf 'status\nping\ncall\nleave\n'
 } | timeout 20 "$CLIENT" --name Alice --host 127.0.0.1 --port 5555 >"$TMP_DIR/client1.out" 2>"$TMP_DIR/client1.err" &
 client1_pid=$!
 
@@ -47,7 +47,7 @@ sleep 1
 
 {
     sleep 12
-    printf 'call\nquit\n'
+    printf 'status\nping\ncall\nleave\n'
 } | timeout 20 "$CLIENT" --name Bob --host 127.0.0.1 --port 5555 >"$TMP_DIR/client2.out" 2>"$TMP_DIR/client2.err" &
 client2_pid=$!
 

@@ -39,7 +39,7 @@ make test         # run rule checks and protocol gameplay tests
 make deps-check   # verify planned system dependencies
 ```
 
-The server defaults to `0.0.0.0:5555`. The client defaults to `127.0.0.1:5555`. Both support `--host`, `--port`, and `--help`; the client also supports `--name`, and the server supports `--audit-db` and `--hand-delay`.
+The server defaults to `0.0.0.0:5555`. The client defaults to `127.0.0.1:5555`. Both support `--host`, `--port`, and `--help`; the client also supports `--name`, and the server supports `--audit-db`, `--hand-delay`, `--action-timeout`, `--starting-chips`, `--min-rebuy`, and `--max-rebuy`.
 
 ## Testing Expectations
 

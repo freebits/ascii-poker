@@ -25,7 +25,8 @@ trap cleanup EXIT
 
 start_server() {
     server_port="${1:-5555}"
-    "$SERVER" --host 127.0.0.1 --port "$server_port" --audit-db "$TMP_DIR/audit.sqlite3" --hand-delay 0 >"$TMP_DIR/server.log" 2>&1 &
+    shift || true
+    "$SERVER" --host 127.0.0.1 --port "$server_port" --audit-db "$TMP_DIR/audit.sqlite3" --hand-delay 0 "$@" >"$TMP_DIR/server.log" 2>&1 &
     server_pid=$!
     sleep 1
 
@@ -145,6 +146,21 @@ wait_for_contains() {
     return 1
 }
 
+wait_no_type() {
+    local fd="$1"
+    local type="$2"
+    local line
+
+    for _ in {1..3}; do
+        if read -r -t 1 -u "$fd" line; then
+            if [[ "$(jq -r '.type // empty' <<<"$line" 2>/dev/null || true)" == "$type" ]]; then
+                echo "integration: unexpectedly received type '$type' on fd $fd" >&2
+                return 1
+            fi
+        fi
+    done
+}
+
 send_action_for_player() {
     local player="$1"
     local action="$2"
@@ -156,6 +172,20 @@ send_action_for_player() {
         printf '{"v":1,"id":"action-bob","session":"%s","type":"action","payload":{"action":"%s","amount":%s}}\n' "$bob_session" "$action" "$amount" >&4
     else
         printf '{"v":1,"id":"action-carol","session":"%s","type":"action","payload":{"action":"%s","amount":%s}}\n' "$carol_session" "$action" "$amount" >&5
+    fi
+}
+
+send_table_command_for_player() {
+    local player="$1"
+    local command="$2"
+    local amount="${3:-0}"
+
+    if [[ "$player" == "Alice" ]]; then
+        printf '{"v":1,"id":"cmd-alice","session":"%s","type":"table_command","payload":{"command":"%s","amount":%s}}\n' "$alice_session" "$command" "$amount" >&3
+    elif [[ "$player" == "Bob" ]]; then
+        printf '{"v":1,"id":"cmd-bob","session":"%s","type":"table_command","payload":{"command":"%s","amount":%s}}\n' "$bob_session" "$command" "$amount" >&4
+    else
+        printf '{"v":1,"id":"cmd-carol","session":"%s","type":"table_command","payload":{"command":"%s","amount":%s}}\n' "$carol_session" "$command" "$amount" >&5
     fi
 }
 
@@ -208,6 +238,43 @@ test_protocol_rejects_bad_session() {
     echo "integration: protocol_rejects_bad_session passed"
 }
 
+test_sitting_out_player_does_not_start_hand() {
+    start_server
+    local welcome
+
+    exec 3<>/dev/tcp/127.0.0.1/"$server_port"
+    printf '{"v":1,"id":"join-alice","type":"join","payload":{"name":"Alice"}}\n' >&3
+    wait_for_type 3 "welcome" welcome
+    alice_session="$(jq -r '.payload.session' <<<"$welcome")"
+
+    send_table_command_for_player "Alice" "sitout" 0
+    wait_for_contains 3 "sitting out"
+
+    exec 4<>/dev/tcp/127.0.0.1/"$server_port"
+    printf '{"v":1,"id":"join-bob","type":"join","payload":{"name":"Bob"}}\n' >&4
+    wait_for_type 4 "welcome" welcome
+    bob_session="$(jq -r '.payload.session' <<<"$welcome")"
+
+    wait_no_type 4 "state"
+
+    stop_server
+    echo "integration: sitting_out_player_does_not_start_hand passed"
+}
+
+test_rebuy_limits() {
+    start_server 5555 --min-rebuy 100 --max-rebuy 1000
+    connect_players
+
+    send_table_command_for_player "Alice" "rebuy" 50
+    wait_for_contains 3 "Rebuy below table minimum"
+
+    send_table_command_for_player "Alice" "rebuy" 1500
+    wait_for_contains 3 "Rebuy above table maximum"
+
+    stop_server
+    echo "integration: rebuy_limits passed"
+}
+
 test_protocol_error_limit_disconnects_client() {
     start_server
     connect_players
@@ -251,6 +318,32 @@ test_disconnect_during_active_hand() {
 
     stop_server
     echo "integration: disconnect_during_active_hand passed"
+}
+
+test_timeout_auto_folds_when_facing_bet() {
+    start_server 5555 --action-timeout 1
+    connect_players
+
+    wait_for_type 3 "hand_result" line
+
+    stop_server
+    echo "integration: timeout_auto_folds_when_facing_bet passed"
+}
+
+test_timeout_auto_checks_when_possible() {
+    start_server 5555 --action-timeout 1
+    connect_players
+
+    local state current
+    wait_for_state 3 state
+    current="$(current_player "$state")"
+    send_action_for_player "$current" "call" 0
+
+    wait_for_contains 3 '"event":"timeout"'
+    wait_for_contains 3 '"action":"check"'
+
+    stop_server
+    echo "integration: timeout_auto_checks_when_possible passed"
 }
 
 test_fold_win() {
@@ -398,8 +491,12 @@ test_custom_port_and_ping
 test_protocol_rejects_legacy_first_message
 test_protocol_requires_join_first
 test_protocol_rejects_bad_session
+test_sitting_out_player_does_not_start_hand
+test_rebuy_limits
 test_protocol_error_limit_disconnects_client
 test_disconnect_during_active_hand
+test_timeout_auto_folds_when_facing_bet
+test_timeout_auto_checks_when_possible
 test_fold_win
 test_invalid_actions
 test_call_check_showdown

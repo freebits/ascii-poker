@@ -61,7 +61,7 @@ bin/poker_server
 For a LAN/VPS live test:
 
 ```bash
-bin/poker_server --host 0.0.0.0 --port 5555 --audit-db poker_audit.sqlite3 --hand-delay 2
+bin/poker_server --host 0.0.0.0 --port 5555 --audit-db poker_audit.sqlite3 --hand-delay 2 --action-timeout 60
 ```
 
 In another terminal, start a client:
@@ -97,8 +97,9 @@ During a game, the client accepts:
 - `sitin`
 - `rebuy [amount]`
 - `ping`
+- `status`
 - `help`
-- `quit`
+- `quit` / `leave`
 
 ## Test
 

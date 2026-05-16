@@ -19,7 +19,6 @@
 
 #define BUFFER_SIZE 4096
 #define MAX_PLAYERS 10
-#define BIG_BLIND 10
 
 typedef struct {
     char name[64];
@@ -134,21 +133,21 @@ void display_game_state(void) {
     
     /* Action prompt - only when it's your turn */
     if (game_state.my_turn) {
-        int call_amount = game_state.legal_active ?
-                          game_state.call_amount : game_state.current_bet - game_state.bet;
-        int min_raise = game_state.legal_active ?
-                        game_state.min_raise :
-                        ((game_state.current_bet == 0) ? BIG_BLIND : game_state.current_bet + BIG_BLIND);
-        int max_raise = game_state.legal_active ? game_state.max_raise : game_state.chips + game_state.bet;
-        
         printf("\n** YOUR TURN **\n");
-        if (call_amount > 0) {
-            printf("Actions: fold | call (%d)", call_amount);
+        if (!game_state.legal_active) {
+            printf("Waiting for legal actions from server");
         } else {
-            printf("Actions: fold | check");
-        }
-        if (!game_state.legal_active || game_state.can_raise) {
-            printf(" | raise <total> (min %d, max %d)", min_raise, max_raise);
+            if (game_state.call_amount > 0) {
+                printf("Actions: fold | call (%d)", game_state.call_amount);
+            } else if (game_state.can_check) {
+                printf("Actions: fold | check");
+            } else {
+                printf("Actions: fold");
+            }
+            if (game_state.can_raise) {
+                printf(" | raise <total> (min %d, max %d)",
+                       game_state.min_raise, game_state.max_raise);
+            }
         }
         printf("\n");
     }
@@ -298,6 +297,18 @@ void parse_message(const char* message) {
             printf("\n%s left the game (%d players)\n> ", player ? player : "Player", count);
             fflush(stdout);
             pthread_mutex_lock(&state_lock);
+        } else if (event && strcmp(event, "timeout") == 0) {
+            const char *action = protocol_get_string(payload, "action");
+            pthread_mutex_unlock(&state_lock);
+            printf("\n%s timed out and was auto-%s\n> ",
+                   player ? player : "Player", action ? action : "acted");
+            fflush(stdout);
+            pthread_mutex_lock(&state_lock);
+        } else if (event) {
+            pthread_mutex_unlock(&state_lock);
+            printf("\n%s\n> ", event);
+            fflush(stdout);
+            pthread_mutex_lock(&state_lock);
         }
     }
     else if (strcmp(type, "hand_result") == 0) {
@@ -434,8 +445,9 @@ void display_help(void) {
     printf("  sitin             Return for the next hand\n");
     printf("  rebuy [amount]    Add chips to your stack\n");
     printf("  ping              Check server heartbeat\n");
+    printf("  status            Redraw current table state\n");
     printf("  help              Show this help\n");
-    printf("  quit              Leave game\n");
+    printf("  quit/leave        Leave game\n");
     printf("\nPlayer status:\n");
     printf("  *   You\n");
     printf("  D   Dealer\n");
@@ -553,7 +565,7 @@ int main(int argc, char* argv[]) {
     
     printf("\nConnected to %s:%d\n", server_ip, port);
     printf("Waiting for game to start...\n");
-    printf("Commands: fold, check, call, raise <amount>, chat <message>, sitout, sitin, rebuy, ping, quit\n\n");
+    printf("Commands: fold, check, call, raise <amount>, chat <message>, sitout, sitin, rebuy, ping, status, quit\n\n");
 
     send_client_payload("join", json_pack("{s:s}", "name", my_name));
     
@@ -582,12 +594,15 @@ int main(int argc, char* argv[]) {
         
         sscanf(command, "%31s %479[^\n]", action, rest);
         
-        if (strcmp(action, "quit") == 0) {
+        if (strcmp(action, "quit") == 0 || strcmp(action, "leave") == 0) {
             running = false;
             break;
         }
         else if (strcmp(action, "help") == 0) {
             display_help();
+        }
+        else if (strcmp(action, "status") == 0) {
+            display_game_state();
         }
         else if (strcmp(action, "fold") == 0 || strcmp(action, "check") == 0 || 
                  strcmp(action, "call") == 0) {

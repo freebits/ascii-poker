@@ -3,6 +3,7 @@
  * Multi-client server with threading
  */
 
+#define _POSIX_C_SOURCE 200809L
 #include "poker.h"
 #include "audit.h"
 #include "ids.h"
@@ -28,10 +29,13 @@
 #define DEFAULT_HOST "0.0.0.0"
 #define DEFAULT_AUDIT_DB "poker_audit.sqlite3"
 #define DEFAULT_HAND_DELAY 2
+#define DEFAULT_ACTION_TIMEOUT 60
+#define DEFAULT_STARTING_CHIPS 1000
+#define DEFAULT_MIN_REBUY 100
+#define DEFAULT_MAX_REBUY 1000
 #define MAX_PROTOCOL_ERRORS 3
 #define SMALL_BLIND 5
 #define BIG_BLIND 10
-#define STARTING_CHIPS 1000
 
 typedef enum {
     PLAYER_EMPTY = 0,
@@ -76,6 +80,7 @@ typedef struct {
     int current_player_index;
     int round;  /* 0=preflop, 1=flop, 2=turn, 3=river */
     bool game_active;
+    time_t turn_started_at;
     int sequence;
     char hand_id[UUID_STRING_LEN];
     AuditLog audit;
@@ -90,13 +95,21 @@ typedef struct {
     int port;
     char audit_db[256];
     int hand_delay;
+    int action_timeout;
+    int starting_chips;
+    int min_rebuy;
+    int max_rebuy;
 } ServerConfig;
 
 ServerConfig config = {
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_AUDIT_DB,
-    DEFAULT_HAND_DELAY
+    DEFAULT_HAND_DELAY,
+    DEFAULT_ACTION_TIMEOUT,
+    DEFAULT_STARTING_CHIPS,
+    DEFAULT_MIN_REBUY,
+    DEFAULT_MAX_REBUY
 };
 
 volatile sig_atomic_t server_running = 1;
@@ -130,6 +143,9 @@ int count_players_in_hand_locked(void);
 int count_players_able_to_act_locked(void);
 int next_eligible_player_locked(int start_idx);
 int next_active_funded_player_locked(int start_idx);
+int count_seated_funded_players_locked(void);
+void set_current_player_locked(int player_idx);
+void check_turn_timeout(void);
 void deal_remaining_community_locked(void);
 void send_legal_actions_locked(int player_idx);
 int build_pots_locked(Pot *pots, int max_pots);
@@ -180,6 +196,10 @@ void print_server_help(const char *program) {
     printf("  --port PORT          Bind port (default: %d)\n", DEFAULT_PORT);
     printf("  --audit-db PATH      SQLite audit database path (default: %s)\n", DEFAULT_AUDIT_DB);
     printf("  --hand-delay SECONDS Delay between hands (default: %d)\n", DEFAULT_HAND_DELAY);
+    printf("  --action-timeout N   Seconds before auto-action, 0 disables (default: %d)\n", DEFAULT_ACTION_TIMEOUT);
+    printf("  --starting-chips N   Chips for new seats (default: %d)\n", DEFAULT_STARTING_CHIPS);
+    printf("  --min-rebuy N        Minimum rebuy amount (default: %d)\n", DEFAULT_MIN_REBUY);
+    printf("  --max-rebuy N        Maximum rebuy amount (default: %d)\n", DEFAULT_MAX_REBUY);
     printf("  --help               Show this help\n");
 }
 
@@ -193,6 +213,14 @@ void parse_server_args(int argc, char **argv) {
             snprintf(config.audit_db, sizeof(config.audit_db), "%s", argv[++i]);
         } else if (strcmp(argv[i], "--hand-delay") == 0 && i + 1 < argc) {
             config.hand_delay = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--action-timeout") == 0 && i + 1 < argc) {
+            config.action_timeout = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--starting-chips") == 0 && i + 1 < argc) {
+            config.starting_chips = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--min-rebuy") == 0 && i + 1 < argc) {
+            config.min_rebuy = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--max-rebuy") == 0 && i + 1 < argc) {
+            config.max_rebuy = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--help") == 0) {
             print_server_help(argv[0]);
             exit(0);
@@ -209,6 +237,11 @@ void parse_server_args(int argc, char **argv) {
     }
     if (config.hand_delay < 0) {
         fprintf(stderr, "Invalid hand delay: %d\n", config.hand_delay);
+        exit(1);
+    }
+    if (config.action_timeout < 0 || config.starting_chips <= 0 ||
+        config.min_rebuy <= 0 || config.max_rebuy < config.min_rebuy) {
+        fprintf(stderr, "Invalid table chip/timeout configuration\n");
         exit(1);
     }
 }
@@ -420,7 +453,7 @@ int add_player(int socket, const char* name) {
                  "session-%d", idx);
     }
     snprintf(game.players[idx].name, sizeof(game.players[idx].name), "%.63s", name);
-    game.players[idx].chips = STARTING_CHIPS;
+    game.players[idx].chips = config.starting_chips;
     game.players[idx].active = true;
     game.players[idx].status = PLAYER_ACTIVE;
     game.players[idx].folded = false;
@@ -499,6 +532,22 @@ int count_players_in_hand_locked(void) {
         }
     }
     return count;
+}
+
+int count_seated_funded_players_locked(void) {
+    int count = 0;
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (game.players[i].active && game.players[i].status == PLAYER_ACTIVE &&
+            game.players[i].chips > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+void set_current_player_locked(int player_idx) {
+    game.current_player_index = player_idx;
+    game.turn_started_at = time(NULL);
 }
 
 int count_players_able_to_act_locked(void) {
@@ -608,13 +657,7 @@ void start_new_hand(void) {
     pthread_mutex_lock(&game.lock);
     
     /* Count active players with chips */
-    int active_count = 0;
-    for (int i = 0; i < MAX_PLAYERS; i++) {
-        if (game.players[i].active && game.players[i].status == PLAYER_ACTIVE &&
-            game.players[i].chips > 0) {
-            active_count++;
-        }
-    }
+    int active_count = count_seated_funded_players_locked();
     
     if (active_count < 2) {
         game.game_active = false;
@@ -709,9 +752,9 @@ void post_blinds(void) {
     
     /* Set first player to act */
     if (active_count == 2) {
-        game.current_player_index = sb_idx;
+        set_current_player_locked(sb_idx);
     } else {
-        game.current_player_index = next_eligible_player_locked(bb_idx);
+        set_current_player_locked(next_eligible_player_locked(bb_idx));
     }
     
     pthread_mutex_unlock(&game.lock);
@@ -993,7 +1036,17 @@ void handle_control(int player_idx, const char* command, int amount) {
     }
     else if (strcmp(command, "rebuy") == 0) {
         if (amount <= 0) {
-            amount = STARTING_CHIPS;
+            amount = config.max_rebuy;
+        }
+        if (amount < config.min_rebuy) {
+            pthread_mutex_unlock(&game.lock);
+            send_error(player->socket, "Rebuy below table minimum");
+            return;
+        }
+        if (amount > config.max_rebuy) {
+            pthread_mutex_unlock(&game.lock);
+            send_error(player->socket, "Rebuy above table maximum");
+            return;
         }
         player->chips += amount;
         if (player->status == PLAYER_EMPTY) {
@@ -1021,6 +1074,41 @@ void handle_control(int player_idx, const char* command, int amount) {
 /* Move to next player */
 void next_player(void) {
     advance_game_after_action();
+}
+
+void check_turn_timeout(void) {
+    if (config.action_timeout == 0) {
+        return;
+    }
+
+    int player_idx = -1;
+    char player_name[64] = "";
+    bool can_check = false;
+
+    pthread_mutex_lock(&game.lock);
+    if (game.game_active && game.current_player_index >= 0 &&
+        game.current_player_index < MAX_PLAYERS) {
+        Player *player = &game.players[game.current_player_index];
+        time_t now = time(NULL);
+        if (player->active && player->status == PLAYER_ACTIVE &&
+            !player->folded && !player->all_in &&
+            difftime(now, game.turn_started_at) >= config.action_timeout) {
+            player_idx = game.current_player_index;
+            snprintf(player_name, sizeof(player_name), "%s", player->name);
+            can_check = player->bet == game.current_bet;
+        }
+    }
+    pthread_mutex_unlock(&game.lock);
+
+    if (player_idx < 0) {
+        return;
+    }
+
+    log_message("INFO", "turn timeout: %s auto-%s", player_name,
+                can_check ? "check" : "fold");
+    send_event("timeout", player_name, can_check ? "check" : "fold",
+               config.action_timeout, -1, -1);
+    handle_action(player_idx, can_check ? "check" : "fold", 0);
 }
 
 void advance_game_after_action(void) {
@@ -1079,7 +1167,7 @@ void advance_game_after_action(void) {
             deal_remaining_community_locked();
             go_to_showdown = true;
         } else {
-            game.current_player_index = next_idx;
+            set_current_player_locked(next_idx);
         }
     }
 
@@ -1152,7 +1240,7 @@ void next_round(void) {
             deal_remaining_community_locked();
             go_to_showdown = true;
         } else {
-            game.current_player_index = next_eligible_player_locked(game.dealer_index);
+            set_current_player_locked(next_eligible_player_locked(game.dealer_index));
         }
     }
 
@@ -1270,23 +1358,29 @@ void showdown(void) {
 /* Game loop thread */
 void* game_loop(void* arg) {
     (void)arg;  /* Unused parameter */
+    int last_waiting_count = -1;
     
     while (server_running) {
         sleep(1);
         
         pthread_mutex_lock(&game.lock);
-        int active_count = 0;
-        for (int i = 0; i < MAX_PLAYERS; i++) {
-            if (game.players[i].active && game.players[i].chips > 0) {
-                active_count++;
-            }
-        }
-        
+        int active_count = count_seated_funded_players_locked();
         bool should_start = !game.game_active && active_count >= 2;
+        bool should_wait_notice = !game.game_active && active_count < 2 &&
+                                  active_count != last_waiting_count;
+        if (!game.game_active) {
+            last_waiting_count = active_count;
+        }
         pthread_mutex_unlock(&game.lock);
         
         if (should_start) {
+            last_waiting_count = -1;
             start_new_hand();
+        } else if (should_wait_notice) {
+            log_message("INFO", "waiting for players: %d seated-in funded", active_count);
+            send_info("Waiting for at least two seated-in players with chips");
+        } else {
+            check_turn_timeout();
         }
     }
     return NULL;
@@ -1353,7 +1447,7 @@ void* handle_client(void* arg) {
                                 "player_id", game.players[player_idx].id,
                                 "session", game.players[player_idx].session,
                                 "name", game.players[player_idx].name,
-                                "chips", STARTING_CHIPS);
+                                "chips", config.starting_chips);
     protocol_send_server(client_socket, next_sequence(), NULL, "welcome", welcome);
     pthread_mutex_unlock(&game.lock);
     
@@ -1506,6 +1600,9 @@ int main(int argc, char **argv) {
     log_message("INFO", "audit db: %s (%s)", config.audit_db,
                 game.audit_enabled ? "enabled" : "disabled");
     log_message("INFO", "hand delay: %d seconds", config.hand_delay);
+    log_message("INFO", "action timeout: %d seconds", config.action_timeout);
+    log_message("INFO", "chips: starting=%d rebuy=%d-%d",
+                config.starting_chips, config.min_rebuy, config.max_rebuy);
     log_message("INFO", "waiting for players");
     
     /* Start game loop thread */

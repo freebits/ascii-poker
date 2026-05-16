@@ -45,8 +45,9 @@ The game starts automatically once two players are connected.
 - `sitin`
 - `rebuy 1000`
 - `ping`
+- `status`
 - `help`
-- `quit`
+- `quit` / `leave`
 
 The client speaks the current newline-delimited JSON protocol. Manual protocol clients must send `join` first, then use the `session` returned in `welcome` for gameplay commands.
 

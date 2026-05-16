@@ -33,7 +33,7 @@ bin/poker_server --host 127.0.0.1 --port 5555 --audit-db poker_audit.sqlite3
 LAN/VPS:
 
 ```bash
-bin/poker_server --host 0.0.0.0 --port 5555 --audit-db poker_audit.sqlite3 --hand-delay 2
+bin/poker_server --host 0.0.0.0 --port 5555 --audit-db poker_audit.sqlite3 --hand-delay 2 --action-timeout 60
 ```
 
 Useful options:
@@ -42,6 +42,10 @@ Useful options:
 - `--port PORT`: bind port, default `5555`
 - `--audit-db PATH`: SQLite audit database path
 - `--hand-delay SECONDS`: delay before the next hand starts after a result
+- `--action-timeout SECONDS`: auto-check or auto-fold after a stalled turn; `0` disables it
+- `--starting-chips N`: chips for newly joined players
+- `--min-rebuy N`: minimum rebuy amount
+- `--max-rebuy N`: maximum rebuy amount
 - `--help`: print server usage
 
 The server logs joins, leaves, actions, hand starts, hand results, protocol errors, and shutdown events to stdout.
@@ -80,7 +84,19 @@ Run through this with two to four testers:
 7. Use `rebuy 1000` and confirm stack changes.
 8. Type `ping` and confirm `PONG`.
 9. Disconnect the current player during a hand and confirm the remaining player receives a hand result.
-10. Stop the server with `Ctrl-C` and confirm it logs shutdown.
+10. Let one player time out while facing a bet and confirm they auto-fold.
+11. Let one player time out when checking is legal and confirm they auto-check.
+12. Try `rebuy 50` and `rebuy 1500` with default limits and confirm both are rejected.
+13. Type `status` and confirm the table redraws.
+14. Stop the server with `Ctrl-C` and confirm it logs shutdown.
+
+## Operator Recovery
+
+- If a tester disconnects, continue the hand; the server folds them if they were active.
+- If a client display looks stale, ask the tester to type `status`.
+- If a player stops responding, wait for the configured action timeout.
+- If the table is stuck waiting, confirm at least two players are seated in and have chips.
+- If the server needs a reset, stop it with `Ctrl-C`, keep the audit DB, and restart with the same command.
 
 ## Known Limits
 
@@ -89,3 +105,4 @@ Run through this with two to four testers:
 - Audit output is local SQLite and is not a compliance ledger.
 - Reconnect creates a new seat; seat reservation/rejoin is not implemented.
 - This build has no cashier, account ledger, anti-fraud, or payments.
+- Timeout and rebuy settings are demo rules, not casino policy controls.
