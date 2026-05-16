@@ -58,10 +58,22 @@ Start the server:
 bin/poker_server
 ```
 
+For a LAN/VPS live test:
+
+```bash
+bin/poker_server --host 0.0.0.0 --port 5555 --audit-db poker_audit.sqlite3 --hand-delay 2
+```
+
 In another terminal, start a client:
 
 ```bash
 bin/poker_client
+```
+
+Or skip prompts:
+
+```bash
+bin/poker_client --name Alice --host 127.0.0.1 --port 5555
 ```
 
 The client prompts for:
@@ -84,6 +96,7 @@ During a game, the client accepts:
 - `sitout`
 - `sitin`
 - `rebuy [amount]`
+- `ping`
 - `help`
 - `quit`
 
@@ -168,3 +181,5 @@ The TCP protocol is newline-delimited JSON. Every client message uses:
 The initial `join` message is the only gameplay message sent without a `session`. The server replies with `welcome`, including `player_id` and `session`, then requires that session on `action`, `table_command`, and `chat` messages.
 
 See `docs/PROTOCOL.md` for the protocol reference.
+
+For private demo operations, see `docs/LIVE_TESTING.md`.

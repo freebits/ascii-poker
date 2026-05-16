@@ -58,6 +58,9 @@ char session_token[128] = "";
 int client_message_seq = 1;
 pthread_mutex_t state_lock = PTHREAD_MUTEX_INITIALIZER;
 bool running = true;
+bool name_from_args = false;
+bool host_from_args = false;
+bool port_from_args = false;
 
 /* Function prototypes */
 void* receive_thread(void* arg);
@@ -68,6 +71,9 @@ void send_action(const char* action, int amount);
 void send_control(const char* command, int amount);
 void send_client_payload(const char *type, json_t *payload);
 void display_help(void);
+void print_client_help(const char *program);
+void parse_client_args(int argc, char **argv, char *server_ip, size_t server_ip_size,
+                       int *port);
 
 /* Clear screen */
 void clear_screen(void) {
@@ -341,6 +347,12 @@ void parse_message(const char* message) {
         fflush(stdout);
         pthread_mutex_lock(&state_lock);
     }
+    else if (strcmp(type, "pong") == 0) {
+        pthread_mutex_unlock(&state_lock);
+        printf("\nPONG\n> ");
+        fflush(stdout);
+        pthread_mutex_lock(&state_lock);
+    }
     
     pthread_mutex_unlock(&state_lock);
     json_decref(json);
@@ -421,6 +433,7 @@ void display_help(void) {
     printf("  sitout            Sit out after folding current hand\n");
     printf("  sitin             Return for the next hand\n");
     printf("  rebuy [amount]    Add chips to your stack\n");
+    printf("  ping              Check server heartbeat\n");
     printf("  help              Show this help\n");
     printf("  quit              Leave game\n");
     printf("\nPlayer status:\n");
@@ -431,25 +444,64 @@ void display_help(void) {
     fflush(stdout);
 }
 
+void print_client_help(const char *program) {
+    printf("Usage: %s [--host ADDR] [--port PORT] [--name NAME]\n", program);
+    printf("\nOptions:\n");
+    printf("  --host ADDR  Server address (default: 127.0.0.1)\n");
+    printf("  --port PORT  Server port (default: 5555)\n");
+    printf("  --name NAME  Player name; skips the name prompt\n");
+    printf("  --help       Show this help\n");
+}
+
+void parse_client_args(int argc, char **argv, char *server_ip, size_t server_ip_size,
+                       int *port) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
+            snprintf(server_ip, server_ip_size, "%s", argv[++i]);
+            host_from_args = true;
+        } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+            *port = atoi(argv[++i]);
+            port_from_args = true;
+        } else if (strcmp(argv[i], "--name") == 0 && i + 1 < argc) {
+            snprintf(my_name, sizeof(my_name), "%.63s", argv[++i]);
+            name_from_args = true;
+        } else if (strcmp(argv[i], "--help") == 0) {
+            print_client_help(argv[0]);
+            exit(0);
+        } else {
+            fprintf(stderr, "Unknown or incomplete option: %s\n", argv[i]);
+            print_client_help(argv[0]);
+            exit(1);
+        }
+    }
+
+    if (*port <= 0 || *port > 65535) {
+        fprintf(stderr, "Invalid port: %d\n", *port);
+        exit(1);
+    }
+}
+
 /* Main function */
 int main(int argc, char* argv[]) {
-    (void)argc;  /* Unused parameters */
-    (void)argv;
-    
     struct sockaddr_in server_addr;
     char server_ip[64] = "127.0.0.1";
     int port = 5555;
+    char input[128];
+
+    parse_client_args(argc, argv, server_ip, sizeof(server_ip), &port);
     
     printf("======================================================================\n");
     printf("                    TEXAS HOLD'EM POKER\n");
     printf("======================================================================\n\n");
     
     /* Get player name */
-    printf("Enter your name: ");
-    fflush(stdout);
-    if (fgets(my_name, sizeof(my_name), stdin)) {
-        char* newline = strchr(my_name, '\n');
-        if (newline) *newline = '\0';
+    if (!name_from_args) {
+        printf("Enter your name: ");
+        fflush(stdout);
+        if (fgets(my_name, sizeof(my_name), stdin)) {
+            char* newline = strchr(my_name, '\n');
+            if (newline) *newline = '\0';
+        }
     }
     
     if (strlen(my_name) == 0) {
@@ -457,22 +509,25 @@ int main(int argc, char* argv[]) {
     }
     
     /* Get server address */
-    printf("Enter server address (default: 127.0.0.1): ");
-    fflush(stdout);
-    
-    char input[128];
-    if (fgets(input, sizeof(input), stdin) && input[0] != '\n') {
-        char* newline = strchr(input, '\n');
-        if (newline) *newline = '\0';
-        snprintf(server_ip, sizeof(server_ip), "%.63s", input);
+    if (!host_from_args) {
+        printf("Enter server address (default: 127.0.0.1): ");
+        fflush(stdout);
+
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n') {
+            char* newline = strchr(input, '\n');
+            if (newline) *newline = '\0';
+            snprintf(server_ip, sizeof(server_ip), "%.63s", input);
+        }
     }
     
     /* Get port */
-    printf("Enter server port (default: 5555): ");
-    fflush(stdout);
-    
-    if (fgets(input, sizeof(input), stdin) && input[0] != '\n') {
-        port = atoi(input);
+    if (!port_from_args) {
+        printf("Enter server port (default: 5555): ");
+        fflush(stdout);
+
+        if (fgets(input, sizeof(input), stdin) && input[0] != '\n') {
+            port = atoi(input);
+        }
     }
     
     /* Connect to server */
@@ -498,7 +553,7 @@ int main(int argc, char* argv[]) {
     
     printf("\nConnected to %s:%d\n", server_ip, port);
     printf("Waiting for game to start...\n");
-    printf("Commands: fold, check, call, raise <amount>, chat <message>, sitout, sitin, rebuy, quit\n\n");
+    printf("Commands: fold, check, call, raise <amount>, chat <message>, sitout, sitin, rebuy, ping, quit\n\n");
 
     send_client_payload("join", json_pack("{s:s}", "name", my_name));
     
@@ -548,6 +603,9 @@ int main(int argc, char* argv[]) {
         }
         else if (strcmp(action, "chat") == 0) {
             send_client_payload("chat", json_pack("{s:s}", "text", rest));
+        }
+        else if (strcmp(action, "ping") == 0) {
+            send_client_payload("ping", json_object());
         }
         else if (strcmp(action, "sitout") == 0 || strcmp(action, "sitin") == 0) {
             send_control(action, 0);

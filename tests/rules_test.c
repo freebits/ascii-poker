@@ -6,7 +6,7 @@
 #include <stdio.h>
 
 static void reset_test_game(void) {
-    init_game();
+    init_game(":memory:");
     for (int i = 0; i < MAX_PLAYERS; i++) {
         game.players[i].active = false;
         game.players[i].status = PLAYER_EMPTY;

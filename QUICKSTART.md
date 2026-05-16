@@ -12,13 +12,13 @@ make
 Terminal 1:
 
 ```bash
-bin/poker_server
+bin/poker_server --host 127.0.0.1 --port 5555
 ```
 
 Terminal 2:
 
 ```bash
-bin/poker_client
+bin/poker_client --name Alice --host 127.0.0.1 --port 5555
 ```
 
 Use defaults for local play:
@@ -29,7 +29,7 @@ Use defaults for local play:
 Terminal 3:
 
 ```bash
-bin/poker_client
+bin/poker_client --name Bob --host 127.0.0.1 --port 5555
 ```
 
 The game starts automatically once two players are connected.
@@ -44,6 +44,7 @@ The game starts automatically once two players are connected.
 - `sitout`
 - `sitin`
 - `rebuy 1000`
+- `ping`
 - `help`
 - `quit`
 
@@ -62,6 +63,8 @@ For the full protocol and gameplay checks:
 ```bash
 make test
 ```
+
+For LAN/VPS demo preparation, see `docs/LIVE_TESTING.md`.
 
 ## Cleanup
 

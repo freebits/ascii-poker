@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER="$ROOT_DIR/bin/poker_server"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ascii-poker-integration.XXXXXX")"
 server_pid=""
+server_port=5555
 alice_session=""
 bob_session=""
 carol_session=""
@@ -23,7 +24,8 @@ cleanup() {
 trap cleanup EXIT
 
 start_server() {
-    "$SERVER" >"$TMP_DIR/server.log" 2>&1 &
+    server_port="${1:-5555}"
+    "$SERVER" --host 127.0.0.1 --port "$server_port" --audit-db "$TMP_DIR/audit.sqlite3" --hand-delay 0 >"$TMP_DIR/server.log" 2>&1 &
     server_pid=$!
     sleep 1
 
@@ -47,7 +49,7 @@ stop_server() {
 
 connect_third_player() {
     local welcome
-    exec 5<>/dev/tcp/127.0.0.1/5555
+    exec 5<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"join-carol","type":"join","payload":{"name":"Carol"}}\n' >&5
     wait_for_type 5 "welcome" welcome
     carol_session="$(jq -r '.payload.session' <<<"$welcome")"
@@ -55,12 +57,12 @@ connect_third_player() {
 
 connect_players() {
     local welcome
-    exec 3<>/dev/tcp/127.0.0.1/5555
+    exec 3<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"join-alice","type":"join","payload":{"name":"Alice"}}\n' >&3
     wait_for_type 3 "welcome" welcome
     alice_session="$(jq -r '.payload.session' <<<"$welcome")"
 
-    exec 4<>/dev/tcp/127.0.0.1/5555
+    exec 4<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"join-bob","type":"join","payload":{"name":"Bob"}}\n' >&4
     wait_for_type 4 "welcome" welcome
     bob_session="$(jq -r '.payload.session' <<<"$welcome")"
@@ -157,9 +159,29 @@ send_action_for_player() {
     fi
 }
 
+send_ping_for_player() {
+    local player="$1"
+    if [[ "$player" == "Alice" ]]; then
+        printf '{"v":1,"id":"ping-alice","session":"%s","type":"ping","payload":{}}\n' "$alice_session" >&3
+    else
+        printf '{"v":1,"id":"ping-bob","session":"%s","type":"ping","payload":{}}\n' "$bob_session" >&4
+    fi
+}
+
+test_custom_port_and_ping() {
+    start_server 5566
+    connect_players
+
+    send_ping_for_player "Alice"
+    wait_for_type 3 "pong" line
+
+    stop_server
+    echo "integration: custom_port_and_ping passed"
+}
+
 test_protocol_rejects_legacy_first_message() {
     start_server
-    exec 3<>/dev/tcp/127.0.0.1/5555
+    exec 3<>/dev/tcp/127.0.0.1/"$server_port"
     printf 'NAME:Alice\n' >&3
     wait_for_contains 3 "invalid JSON"
     stop_server
@@ -168,7 +190,7 @@ test_protocol_rejects_legacy_first_message() {
 
 test_protocol_requires_join_first() {
     start_server
-    exec 3<>/dev/tcp/127.0.0.1/5555
+    exec 3<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"act-before-join","type":"action","payload":{"action":"call","amount":0}}\n' >&3
     wait_for_contains 3 "First message must be join"
     stop_server
@@ -184,6 +206,51 @@ test_protocol_rejects_bad_session() {
 
     stop_server
     echo "integration: protocol_rejects_bad_session passed"
+}
+
+test_protocol_error_limit_disconnects_client() {
+    start_server
+    connect_players
+
+    for _ in {1..3}; do
+        printf '{"v":1,"id":"bad","session":"%s","type":"action","payload":{"action":"dance","amount":0}}\n' "$alice_session" >&3
+    done
+
+    local line disconnected=0
+    for _ in {1..10}; do
+        if ! read -r -t 1 -u 3 line; then
+            disconnected=1
+            break
+        fi
+    done
+
+    if [[ "$disconnected" != "1" ]]; then
+        echo "integration: expected client disconnect after protocol errors" >&2
+        exit 1
+    fi
+
+    stop_server
+    echo "integration: protocol_error_limit_disconnects_client passed"
+}
+
+test_disconnect_during_active_hand() {
+    start_server
+    connect_players
+
+    local state current
+    wait_for_state 3 state
+    current="$(current_player "$state")"
+
+    if [[ "$current" == "Alice" ]]; then
+        exec 3<&- 3>&-
+        wait_for_type 4 "hand_result" line
+    else
+        exec 4<&- 4>&-
+        wait_for_type 3 "hand_result" line
+    fi
+
+    stop_server
+    echo "integration: disconnect_during_active_hand passed"
 }
 
 test_fold_win() {
@@ -327,9 +394,12 @@ if [[ ! -x "$SERVER" ]]; then
     exit 1
 fi
 
+test_custom_port_and_ping
 test_protocol_rejects_legacy_first_message
 test_protocol_requires_join_first
 test_protocol_rejects_bad_session
+test_protocol_error_limit_disconnects_client
+test_disconnect_during_active_hand
 test_fold_win
 test_invalid_actions
 test_call_check_showdown

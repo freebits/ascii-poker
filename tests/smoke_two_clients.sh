@@ -38,19 +38,17 @@ if ! kill -0 "$server_pid" 2>/dev/null; then
 fi
 
 {
-    printf 'Alice\n\n\n'
     sleep 12
     printf 'call\nquit\n'
-} | timeout 20 "$CLIENT" >"$TMP_DIR/client1.out" 2>"$TMP_DIR/client1.err" &
+} | timeout 20 "$CLIENT" --name Alice --host 127.0.0.1 --port 5555 >"$TMP_DIR/client1.out" 2>"$TMP_DIR/client1.err" &
 client1_pid=$!
 
 sleep 1
 
 {
-    printf 'Bob\n\n\n'
     sleep 12
     printf 'call\nquit\n'
-} | timeout 20 "$CLIENT" >"$TMP_DIR/client2.out" 2>"$TMP_DIR/client2.err" &
+} | timeout 20 "$CLIENT" --name Bob --host 127.0.0.1 --port 5555 >"$TMP_DIR/client2.out" 2>"$TMP_DIR/client2.err" &
 client2_pid=$!
 
 wait "$client1_pid" || true
