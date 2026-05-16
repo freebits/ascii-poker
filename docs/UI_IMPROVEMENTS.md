@@ -162,8 +162,8 @@ OR when no bet to call:
 - ✅ Telnet, serial terminals (100% compatible)
 
 ## Files Modified
-- `client.c` - `display_game_state()` function (~114 lines, simplified)
-- `client.c` - `display_help()` function (~27 lines)
+- `src/client.c` - `display_game_state()` function (~114 lines, simplified)
+- `src/client.c` - `display_help()` function (~27 lines)
 
 ## Result
 A **clean, professional, and universally compatible** poker interface that works on absolutely any terminal!

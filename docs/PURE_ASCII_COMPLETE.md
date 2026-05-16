@@ -25,12 +25,12 @@ make clean && make all
 
 **2. Start the server:**
 ```bash
-./poker_server
+bin/poker_server
 ```
 
 **3. Connect clients (in separate terminals):**
 ```bash
-./poker_client
+bin/poker_client
 ```
 
 **4. See the interface:**
@@ -105,8 +105,8 @@ make clean && make all
 
 ### Files Modified
 
-- `client.c` - `display_game_state()` (lines 63-177)
-- `client.c` - `display_help()` (lines 464-492)
+- `src/client.c` - `display_game_state()` (lines 63-177)
+- `src/client.c` - `display_help()` (lines 464-492)
 - All documentation updated
 
 ### Testing
@@ -127,8 +127,8 @@ The game is **fully functional** and ready for gameplay. Optional enhancements:
 
 **Try it now:**
 ```bash
-./poker_server &
-./poker_client
+bin/poker_server &
+bin/poker_client
 ```
 
 ---

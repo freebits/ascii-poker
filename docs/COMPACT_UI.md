@@ -157,8 +157,8 @@ Actions: fold | check | raise <amt> (min 100)
 
 Run the game:
 ```bash
-./poker_server &
-./poker_client
+bin/poker_server &
+bin/poker_client
 ```
 
 Or see the demo:

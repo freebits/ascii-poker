@@ -1,59 +1,66 @@
-# Quick Start Guide - C Version
+# Quick Start
 
-## Compilation
+## Build
 
 ```bash
+make deps-check
 make
 ```
 
-## Running the Game
+## Run a Local Game
 
-### Terminal 1 - Start Server
+Terminal 1:
+
 ```bash
-./poker_server
+bin/poker_server
 ```
 
-### Terminal 2 - First Player
+Terminal 2:
+
 ```bash
-./poker_client
-# Enter name: Alice
-# Server address: 127.0.0.1
-# Port: 5555
+bin/poker_client
 ```
 
-### Terminal 3 - Second Player
+Use defaults for local play:
+
+- Server address: `127.0.0.1`
+- Port: `5555`
+
+Terminal 3:
+
 ```bash
-./poker_client
-# Enter name: Bob
-# Server address: 127.0.0.1
-# Port: 5555
+bin/poker_client
 ```
 
-## Game will start automatically when 2+ players join!
+The game starts automatically once two players are connected.
 
 ## In-Game Commands
 
-- `fold` - Fold hand
-- `check` - Check (if no bet)
-- `call` - Call current bet
-- `raise 100` - Raise to 100 chips
-- `chat Hello!` - Send message
-- `help` - Show commands
-- `quit` - Exit game
+- `fold`
+- `check`
+- `call`
+- `raise 100`
+- `chat Hello`
+- `sitout`
+- `sitin`
+- `rebuy 1000`
+- `help`
+- `quit`
 
-## Network Play
+The client speaks the current newline-delimited JSON protocol. Manual protocol clients must send `join` first, then use the `session` returned in `welcome` for gameplay commands.
 
-### On Server Machine
+## Smoke Test
+
 ```bash
-./poker_server
-# Note your IP address (e.g., 192.168.1.100)
+make smoke
 ```
 
-### On Client Machines
+This starts a temporary local server and two scripted clients. It may require local socket permission in sandboxed environments.
+
+For the full protocol and gameplay checks:
+
 ```bash
-./poker_client
-# Enter server IP: 192.168.1.100
-# Port: 5555
+make test
 ```
 
 ## Cleanup
@@ -61,26 +68,3 @@ make
 ```bash
 make clean
 ```
-
-## Troubleshooting
-
-**Port already in use:**
-```bash
-# Find process using port 5555
-lsof -i :5555
-# Kill it
-kill -9 <PID>
-```
-
-**Compilation errors:**
-```bash
-# Ensure you have gcc and pthread
-gcc --version
-# On Debian/Ubuntu
-sudo apt-get install build-essential
-```
-
-**Can't connect:**
-- Check firewall allows port 5555
-- Verify server is running
-- Use correct IP address (127.0.0.1 for local)

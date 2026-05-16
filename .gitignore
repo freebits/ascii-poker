@@ -1,0 +1,21 @@
+# Build output
+/bin/
+/build/
+*.o
+
+# Runtime and test logs
+*.log
+*.sqlite3
+*_debug.log
+*_output.log
+test_output.log
+
+# Temporary local test programs
+/test_*
+!/tests/
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
+*~

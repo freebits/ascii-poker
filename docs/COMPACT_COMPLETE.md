@@ -82,8 +82,8 @@ Modeled after:
 ./demo_compact_ui.sh
 
 # Play the game
-./poker_server &
-./poker_client
+bin/poker_server &
+bin/poker_client
 ```
 
 ### Benefits
@@ -119,7 +119,7 @@ Player status:
 
 - **COMPACT_UI.md** - Complete design rationale
 - **demo_compact_ui.sh** - Live demonstration
-- Files modified: `client.c` (display functions simplified)
+- Files modified: `src/client.c` (display functions simplified)
 
 ---
 
