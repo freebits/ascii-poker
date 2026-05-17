@@ -15,10 +15,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <termios.h>
+#include <stdarg.h>
 #include <jansson.h>
 
 #define BUFFER_SIZE 4096
 #define MAX_PLAYERS 10
+#define EVENT_HISTORY 6
 
 typedef struct {
     char name[64];
@@ -28,6 +30,7 @@ typedef struct {
     bool all_in;
     bool is_dealer;
     bool is_current;
+    char status[16];
 } PlayerInfo;
 
 typedef struct {
@@ -60,6 +63,8 @@ bool running = true;
 bool name_from_args = false;
 bool host_from_args = false;
 bool port_from_args = false;
+char recent_events[EVENT_HISTORY][160];
+int recent_event_count = 0;
 
 /* Function prototypes */
 void* receive_thread(void* arg);
@@ -69,6 +74,9 @@ void clear_screen(void);
 void send_action(const char* action, int amount);
 void send_control(const char* command, int amount);
 void send_client_payload(const char *type, json_t *payload);
+void add_recent_event(const char *fmt, ...);
+bool ensure_session_ready(const char *command);
+bool can_send_action(const char *action, int amount);
 void display_help(void);
 void print_client_help(const char *program);
 void parse_client_args(int argc, char **argv, char *server_ip, size_t server_ip_size,
@@ -77,6 +85,20 @@ void parse_client_args(int argc, char **argv, char *server_ip, size_t server_ip_
 /* Clear screen */
 void clear_screen(void) {
     printf("\033[2J\033[H");
+}
+
+void add_recent_event(const char *fmt, ...) {
+    if (recent_event_count < EVENT_HISTORY) {
+        recent_event_count++;
+    }
+    for (int i = recent_event_count - 1; i > 0; i--) {
+        snprintf(recent_events[i], sizeof(recent_events[i]), "%s", recent_events[i - 1]);
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(recent_events[0], sizeof(recent_events[0]), fmt, args);
+    va_end(args);
 }
 
 /* Display game state */
@@ -126,9 +148,17 @@ void display_game_state(void) {
                p->chips);
         
         if (p->bet > 0) printf(" (%d)", p->bet);
+        if (strcmp(p->status, "sitting_out") == 0) printf(" SITOUT");
         if (p->folded) printf(" FOLD");
         if (p->all_in) printf(" ALL-IN");
         printf("\n");
+    }
+
+    if (recent_event_count > 0) {
+        printf("\nRecent:\n");
+        for (int i = recent_event_count - 1; i >= 0; i--) {
+            printf("  %s\n", recent_events[i]);
+        }
     }
     
     /* Action prompt - only when it's your turn */
@@ -240,6 +270,8 @@ void parse_message(const char* message) {
                 pi->all_in = json_is_true(json_object_get(player, "all_in"));
                 pi->is_dealer = json_is_true(json_object_get(player, "dealer"));
                 pi->is_current = json_is_true(json_object_get(player, "current"));
+                const char *status = protocol_get_string(player, "status");
+                snprintf(pi->status, sizeof(pi->status), "%s", status ? status : "active");
             }
         }
 
@@ -271,6 +303,16 @@ void parse_message(const char* message) {
         if (event && strcmp(event, "action") == 0) {
             const char *action = protocol_get_string(payload, "action");
             int amount = (int)json_integer_value(json_object_get(payload, "amount"));
+            if (amount > 0) {
+                add_recent_event("%s %s %d",
+                                 player ? player : "Player",
+                                 action ? action : "acts",
+                                 amount);
+            } else {
+                add_recent_event("%s %s",
+                                 player ? player : "Player",
+                                 action ? action : "acts");
+            }
             pthread_mutex_unlock(&state_lock);
             printf("\n%s %s", player ? player : "Player", action ? action : "acts");
             if (amount > 0) {
@@ -281,24 +323,29 @@ void parse_message(const char* message) {
             pthread_mutex_lock(&state_lock);
         } else if (event && strcmp(event, "chat") == 0) {
             const char *text = protocol_get_string(payload, "text");
+            add_recent_event("[%s] %s", player ? player : "Player", text ? text : "");
             pthread_mutex_unlock(&state_lock);
             printf("\n[%s]: %s\n> ", player ? player : "Player", text ? text : "");
             fflush(stdout);
             pthread_mutex_lock(&state_lock);
         } else if (event && strcmp(event, "player_joined") == 0) {
             int count = (int)json_integer_value(json_object_get(payload, "player_count"));
+            add_recent_event("%s joined (%d players)", player ? player : "Player", count);
             pthread_mutex_unlock(&state_lock);
             printf("\n%s joined the game (%d players)\n> ", player ? player : "Player", count);
             fflush(stdout);
             pthread_mutex_lock(&state_lock);
         } else if (event && strcmp(event, "player_left") == 0) {
             int count = (int)json_integer_value(json_object_get(payload, "player_count"));
+            add_recent_event("%s left (%d players)", player ? player : "Player", count);
             pthread_mutex_unlock(&state_lock);
             printf("\n%s left the game (%d players)\n> ", player ? player : "Player", count);
             fflush(stdout);
             pthread_mutex_lock(&state_lock);
         } else if (event && strcmp(event, "timeout") == 0) {
             const char *action = protocol_get_string(payload, "action");
+            add_recent_event("%s timed out: auto-%s",
+                             player ? player : "Player", action ? action : "acted");
             pthread_mutex_unlock(&state_lock);
             printf("\n%s timed out and was auto-%s\n> ",
                    player ? player : "Player", action ? action : "acted");
@@ -346,6 +393,7 @@ void parse_message(const char* message) {
     }
     else if (strcmp(type, "error") == 0) {
         const char *text = protocol_get_string(payload, "message");
+        add_recent_event("ERROR: %s", text ? text : "Unknown error");
         pthread_mutex_unlock(&state_lock);
         printf("\nERROR: %s\n> ", text ? text : "Unknown error");
         fflush(stdout);
@@ -353,6 +401,7 @@ void parse_message(const char* message) {
     }
     else if (strcmp(type, "info") == 0) {
         const char *text = protocol_get_string(payload, "message");
+        add_recent_event("%s", text ? text : "");
         pthread_mutex_unlock(&state_lock);
         printf("\n%s\n> ", text ? text : "");
         fflush(stdout);
@@ -423,6 +472,55 @@ void send_client_payload(const char *type, json_t *payload) {
     json_decref(message);
 }
 
+bool ensure_session_ready(const char *command) {
+    if (session_token[0]) {
+        return true;
+    }
+    printf("%s is not available until the server welcomes you.\n> ", command);
+    fflush(stdout);
+    return false;
+}
+
+bool can_send_action(const char *action, int amount) {
+    if (!ensure_session_ready(action)) {
+        return false;
+    }
+    if (!game_state.my_turn) {
+        printf("It is not your turn.\n> ");
+        fflush(stdout);
+        return false;
+    }
+    if (!game_state.legal_active) {
+        printf("Waiting for legal actions from server.\n> ");
+        fflush(stdout);
+        return false;
+    }
+    if (strcmp(action, "check") == 0 && !game_state.can_check) {
+        printf("Cannot check right now.\n> ");
+        fflush(stdout);
+        return false;
+    }
+    if (strcmp(action, "call") == 0 && game_state.call_amount <= 0) {
+        printf("Call is not available; check is likely legal.\n> ");
+        fflush(stdout);
+        return false;
+    }
+    if (strcmp(action, "raise") == 0) {
+        if (!game_state.can_raise) {
+            printf("Raise is not available right now.\n> ");
+            fflush(stdout);
+            return false;
+        }
+        if (amount < game_state.min_raise || amount > game_state.max_raise) {
+            printf("Raise total must be between %d and %d.\n> ",
+                   game_state.min_raise, game_state.max_raise);
+            fflush(stdout);
+            return false;
+        }
+    }
+    return true;
+}
+
 void send_action(const char* action, int amount) {
     send_client_payload("action",
             json_pack("{s:s, s:i}", "action", action, "amount", amount));
@@ -440,6 +538,8 @@ void display_help(void) {
     printf("  check             Check (no bet required)\n");
     printf("  call              Match current bet\n");
     printf("  raise <amount>    Raise bet to total amount\n");
+    printf("  bet <amount>      Alias for raise <amount>\n");
+    printf("  allin             Commit your maximum legal amount\n");
     printf("  chat <message>    Send message to all players\n");
     printf("  sitout            Sit out after folding current hand\n");
     printf("  sitin             Return for the next hand\n");
@@ -604,29 +704,73 @@ int main(int argc, char* argv[]) {
         else if (strcmp(action, "status") == 0) {
             display_game_state();
         }
-        else if (strcmp(action, "fold") == 0 || strcmp(action, "check") == 0 || 
+        else if (strcmp(action, "fold") == 0 || strcmp(action, "check") == 0 ||
                  strcmp(action, "call") == 0) {
-            send_action(action, 0);
+            if (can_send_action(action, 0)) {
+                send_action(action, 0);
+            }
         }
-        else if (strcmp(action, "raise") == 0) {
-            int amount = atoi(rest);
-            if (amount > 0) {
+        else if (strcmp(action, "raise") == 0 || strcmp(action, "bet") == 0) {
+            char *endptr = NULL;
+            int amount = (int)strtol(rest, &endptr, 10);
+            if (rest[0] != '\0' && endptr && *endptr == '\0' && amount > 0) {
+                if (!can_send_action("raise", amount)) {
+                    continue;
+                }
                 send_action("raise", amount);
             } else {
                 printf("Usage: raise <amount>\n");
             }
         }
+        else if (strcmp(action, "allin") == 0) {
+            if (!ensure_session_ready("allin")) {
+                continue;
+            }
+            if (!game_state.my_turn || !game_state.legal_active) {
+                printf("All-in is only available on your turn.\n> ");
+                fflush(stdout);
+                continue;
+            }
+            if (game_state.can_raise && game_state.max_raise > game_state.bet) {
+                send_action("raise", game_state.max_raise);
+            } else if (game_state.call_amount > 0) {
+                send_action("call", 0);
+            } else if (game_state.can_check) {
+                send_action("check", 0);
+            } else {
+                send_action("fold", 0);
+            }
+        }
         else if (strcmp(action, "chat") == 0) {
+            if (!ensure_session_ready("chat")) {
+                continue;
+            }
+            if (rest[0] == '\0') {
+                printf("Usage: chat <message>\n> ");
+                fflush(stdout);
+                continue;
+            }
             send_client_payload("chat", json_pack("{s:s}", "text", rest));
         }
         else if (strcmp(action, "ping") == 0) {
             send_client_payload("ping", json_object());
         }
         else if (strcmp(action, "sitout") == 0 || strcmp(action, "sitin") == 0) {
-            send_control(action, 0);
+            if (ensure_session_ready(action)) {
+                send_control(action, 0);
+            }
         }
         else if (strcmp(action, "rebuy") == 0) {
-            int amount = atoi(rest);
+            if (!ensure_session_ready("rebuy")) {
+                continue;
+            }
+            char *endptr = NULL;
+            int amount = rest[0] ? (int)strtol(rest, &endptr, 10) : 0;
+            if (rest[0] && (!endptr || *endptr != '\0' || amount <= 0)) {
+                printf("Usage: rebuy [amount]\n> ");
+                fflush(stdout);
+                continue;
+            }
             send_control("rebuy", amount);
         }
         else {

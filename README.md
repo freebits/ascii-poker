@@ -92,6 +92,8 @@ During a game, the client accepts:
 - `check`
 - `call`
 - `raise <amount>`
+- `bet <amount>`
+- `allin`
 - `chat <message>`
 - `sitout`
 - `sitin`

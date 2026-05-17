@@ -83,12 +83,14 @@ Run through this with two to four testers:
 6. Use `sitout`, wait for the next hand, then use `sitin`.
 7. Use `rebuy 1000` and confirm stack changes.
 8. Type `ping` and confirm `PONG`.
-9. Disconnect the current player during a hand and confirm the remaining player receives a hand result.
-10. Let one player time out while facing a bet and confirm they auto-fold.
-11. Let one player time out when checking is legal and confirm they auto-check.
-12. Try `rebuy 50` and `rebuy 1500` with default limits and confirm both are rejected.
-13. Type `status` and confirm the table redraws.
-14. Stop the server with `Ctrl-C` and confirm it logs shutdown.
+9. Use `bet <amount>` and confirm it behaves like `raise <amount>`.
+10. Use `allin` and confirm the client commits the maximum legal amount.
+11. Disconnect the current player during a hand and confirm the remaining player receives a hand result.
+12. Let one player time out while facing a bet and confirm they auto-fold.
+13. Let one player time out when checking is legal and confirm they auto-check.
+14. Try `rebuy 50` and `rebuy 1500` with default limits and confirm both are rejected.
+15. Type `status` and confirm the table redraws.
+16. Stop the server with `Ctrl-C` and confirm it logs shutdown.
 
 ## Operator Recovery
 

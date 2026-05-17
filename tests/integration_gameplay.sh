@@ -49,7 +49,7 @@ stop_server() {
 }
 
 connect_third_player() {
-    local welcome
+    local welcome state
     exec 5<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"join-carol","type":"join","payload":{"name":"Carol"}}\n' >&5
     wait_for_type 5 "welcome" welcome
@@ -57,7 +57,7 @@ connect_third_player() {
 }
 
 connect_players() {
-    local welcome
+    local welcome state
     exec 3<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"join-alice","type":"join","payload":{"name":"Alice"}}\n' >&3
     wait_for_type 3 "welcome" welcome
@@ -89,6 +89,10 @@ current_player() {
 
 player_bet() {
     jq -r --arg target "$2" '.payload.players[] | select(.name == $target) | .bet' <<<"$1"
+}
+
+legal_max_raise() {
+    jq -r '.payload.legal.max_raise' <<<"$1"
 }
 
 wait_for_type() {
@@ -126,6 +130,42 @@ wait_for_state() {
     done
 
     echo "integration: timed out waiting for state on fd $fd" >&2
+    return 1
+}
+
+wait_for_turn_state() {
+    local fd="$1"
+    local __result="$2"
+    local state current
+
+    for _ in {1..30}; do
+        wait_for_state "$fd" state
+        current="$(current_player "$state")"
+        if [[ -n "$current" && "$(jq -r '.payload.legal.active' <<<"$state")" == "true" ]]; then
+            printf -v "$__result" '%s' "$state"
+            return 0
+        fi
+    done
+
+    echo "integration: timed out waiting for turn state on fd $fd" >&2
+    return 1
+}
+
+wait_for_current_player_state() {
+    local fd="$1"
+    local target="$2"
+    local __result="$3"
+    local state
+
+    for _ in {1..30}; do
+        wait_for_state "$fd" state
+        if [[ "$(current_player "$state")" == "$target" ]]; then
+            printf -v "$__result" '%s' "$state"
+            return 0
+        fi
+    done
+
+    echo "integration: timed out waiting for current player '$target' on fd $fd" >&2
     return 1
 }
 
@@ -238,6 +278,22 @@ test_protocol_rejects_bad_session() {
     echo "integration: protocol_rejects_bad_session passed"
 }
 
+test_duplicate_name_rejected() {
+    start_server
+    local welcome
+
+    exec 3<>/dev/tcp/127.0.0.1/"$server_port"
+    printf '{"v":1,"id":"join-alice-1","type":"join","payload":{"name":"Alice"}}\n' >&3
+    wait_for_type 3 "welcome" welcome
+
+    exec 4<>/dev/tcp/127.0.0.1/"$server_port"
+    printf '{"v":1,"id":"join-alice-2","type":"join","payload":{"name":"Alice"}}\n' >&4
+    wait_for_contains 4 "Player name already in use"
+
+    stop_server
+    echo "integration: duplicate_name_rejected passed"
+}
+
 test_sitting_out_player_does_not_start_hand() {
     start_server
     local welcome
@@ -248,7 +304,11 @@ test_sitting_out_player_does_not_start_hand() {
     alice_session="$(jq -r '.payload.session' <<<"$welcome")"
 
     send_table_command_for_player "Alice" "sitout" 0
-    wait_for_contains 3 "sitting out"
+    wait_for_state 3 state
+    if [[ "$(jq -r '.payload.players[] | select(.name == "Alice") | .status' <<<"$state")" != "sitting_out" ]]; then
+        echo "integration: Alice did not appear as sitting_out" >&2
+        exit 1
+    fi
 
     exec 4<>/dev/tcp/127.0.0.1/"$server_port"
     printf '{"v":1,"id":"join-bob","type":"join","payload":{"name":"Bob"}}\n' >&4
@@ -491,6 +551,7 @@ test_custom_port_and_ping
 test_protocol_rejects_legacy_first_message
 test_protocol_requires_join_first
 test_protocol_rejects_bad_session
+test_duplicate_name_rejected
 test_sitting_out_player_does_not_start_hand
 test_rebuy_limits
 test_protocol_error_limit_disconnects_client

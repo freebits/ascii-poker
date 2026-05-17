@@ -128,6 +128,7 @@ void send_event(const char *event, const char *player, const char *action,
 void broadcast_payload(const char *type, json_t *payload, int exclude_socket);
 void audit_payload(const char *type, const char *player_id, json_t *payload);
 int add_player(int socket, const char* name);
+bool sanitize_player_name(const char *input, char *output, size_t output_size);
 void remove_player(int socket);
 void start_new_hand(void);
 void post_blinds(void);
@@ -156,6 +157,7 @@ void send_player_state_locked(int player_idx);
 int recv_line(int socket, char *line, size_t size);
 bool session_matches_player(int player_idx, json_t *message);
 bool message_requires_session(const char *type);
+bool active_name_exists_locked(const char *name);
 void log_message(const char *level, const char *fmt, ...);
 void handle_signal(int sig);
 void parse_server_args(int argc, char **argv);
@@ -413,6 +415,43 @@ void close_all_clients(void) {
     pthread_mutex_unlock(&game.lock);
 }
 
+bool sanitize_player_name(const char *input, char *output, size_t output_size) {
+    if (!input || !output || output_size == 0) {
+        return false;
+    }
+
+    while (*input == ' ' || *input == '\t' || *input == '\r' || *input == '\n') {
+        input++;
+    }
+
+    size_t len = 0;
+    while (input[len] && len + 1 < output_size) {
+        char c = input[len];
+        if (c == ':' || c == '|' || c == '\n' || c == '\r') {
+            output[len] = '_';
+        } else {
+            output[len] = c;
+        }
+        len++;
+    }
+
+    while (len > 0 && (output[len - 1] == ' ' || output[len - 1] == '\t')) {
+        len--;
+    }
+    output[len] = '\0';
+
+    return len > 0;
+}
+
+bool active_name_exists_locked(const char *name) {
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        if (game.players[i].active && strcmp(game.players[i].name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Broadcast message to all players except one */
 void broadcast_message(const char* message, int exclude_socket) {
     pthread_mutex_lock(&game.lock);
@@ -429,6 +468,11 @@ void broadcast_message(const char* message, int exclude_socket) {
 /* Add player to game */
 int add_player(int socket, const char* name) {
     pthread_mutex_lock(&game.lock);
+
+    if (active_name_exists_locked(name)) {
+        pthread_mutex_unlock(&game.lock);
+        return -2;
+    }
     
     int idx = -1;
     for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -1150,6 +1194,7 @@ void advance_game_after_action(void) {
         if (award_fold_winner) {
             log_message("INFO", "hand result: everyone folded");
             broadcast_payload("hand_result", winner_payload, -1);
+            send_game_state();
             sleep((unsigned int)config.hand_delay);
             start_new_hand();
         }
@@ -1351,6 +1396,7 @@ void showdown(void) {
             json_pack("{s:s, s:o}", "reason", "showdown", "winners", winners_json),
             -1);
 
+    send_game_state();
     sleep((unsigned int)config.hand_delay);
     start_new_hand();
 }
@@ -1429,13 +1475,21 @@ void* handle_client(void* arg) {
     }
 
     const char *requested_name = protocol_get_string(payload, "name");
-    if (requested_name && requested_name[0]) {
-        snprintf(name, sizeof(name), "%.63s", requested_name);
+    if (!sanitize_player_name(requested_name, name, sizeof(name))) {
+        json_decref(join);
+        send_error(client_socket, "Invalid player name");
+        close(client_socket);
+        return NULL;
     }
     json_decref(join);
     
     /* Add player */
     int player_idx = add_player(client_socket, name);
+    if (player_idx == -2) {
+        send_error(client_socket, "Player name already in use");
+        close(client_socket);
+        return NULL;
+    }
     if (player_idx == -1) {
         send_error(client_socket, "Server full");
         close(client_socket);

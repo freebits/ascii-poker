@@ -40,6 +40,8 @@ The game starts automatically once two players are connected.
 - `check`
 - `call`
 - `raise 100`
+- `bet 100`
+- `allin`
 - `chat Hello`
 - `sitout`
 - `sitin`

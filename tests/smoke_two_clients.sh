@@ -39,7 +39,7 @@ fi
 
 {
     sleep 12
-    printf 'status\nping\ncall\nleave\n'
+    printf 'chat\nraise nope\nstatus\nping\ncall\nleave\n'
 } | timeout 20 "$CLIENT" --name Alice --host 127.0.0.1 --port 5555 >"$TMP_DIR/client1.out" 2>"$TMP_DIR/client1.err" &
 client1_pid=$!
 
@@ -47,7 +47,7 @@ sleep 1
 
 {
     sleep 12
-    printf 'status\nping\ncall\nleave\n'
+    printf 'bet 20\nallin\nstatus\nping\ncall\nleave\n'
 } | timeout 20 "$CLIENT" --name Bob --host 127.0.0.1 --port 5555 >"$TMP_DIR/client2.out" 2>"$TMP_DIR/client2.err" &
 client2_pid=$!
 
@@ -81,6 +81,18 @@ if ! grep -q 'Pot:' "$TMP_DIR/client2.out"; then
     echo "smoke: client 2 did not receive game state" >&2
     sed -n '1,140p' "$TMP_DIR/client2.out" >&2
     sed -n '1,100p' "$TMP_DIR/client2.err" >&2
+    exit 1
+fi
+
+if ! grep -q 'Usage: chat <message>' "$TMP_DIR/client1.out"; then
+    echo "smoke: client did not reject blank chat" >&2
+    sed -n '1,160p' "$TMP_DIR/client1.out" >&2
+    exit 1
+fi
+
+if ! grep -q 'Usage: raise <amount>' "$TMP_DIR/client1.out"; then
+    echo "smoke: client did not reject invalid raise text" >&2
+    sed -n '1,160p' "$TMP_DIR/client1.out" >&2
     exit 1
 fi
 
